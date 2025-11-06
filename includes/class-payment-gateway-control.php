@@ -20,7 +20,7 @@ class SER_Payment_Gateway_Control {
      * Filter payment gateways based on currency settings
      */
     public function filter_gateways_by_currency($available_gateways) {
-        if (is_admin() || !is_checkout()) {
+        if (is_admin()) {
             return $available_gateways;
         }
         

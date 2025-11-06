@@ -3,7 +3,7 @@
  * Plugin Name: Shipping Event Receiver
  * Plugin URI: https://example.com/shipping-event-receiver
  * Description: Receives event notifications for orders from third-party shipping platforms and logs all requests
- * Version: 1.0.7
+ * Version: 1.0.8
  * Author: Kazeem Quadri
  * Author URI: https://example.com
  * License: GPL v2 or later
