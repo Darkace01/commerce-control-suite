@@ -1344,6 +1344,18 @@ class Shipping_Event_Receiver {
 
 // Initialize the plugin only once
 function shipping_event_receiver_init() {
+    // Check if WooCommerce is active
+    if (!class_exists('WooCommerce')) {
+        add_action('admin_notices', function() {
+            ?>
+            <div class="notice notice-error is-dismissible">
+                <p><?php _e('WooCommerce Control Suite requires WooCommerce to be installed and active.', 'wc-control-suite'); ?></p>
+            </div>
+            <?php
+        });
+        return;
+    }
+
     if (!isset($GLOBALS['shipping_event_receiver_instance']) && class_exists('Shipping_Event_Receiver')) {
         $GLOBALS['shipping_event_receiver_instance'] = new Shipping_Event_Receiver();
     }
