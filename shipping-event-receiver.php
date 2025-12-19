@@ -101,12 +101,11 @@ class CommerceControlSuite {
                 'shipping-payment-gateway' => self::PAGE_PAYMENT_GATEWAY
             );
             
-            $currentPage = sanitize_text_field($_GET['page']);
+            $currentPage = isset( $_GET['page'] ) ? sanitize_text_field( wp_unslash( $_GET['page'] ) ) : '';
             
             if (isset($oldToNew[$currentPage])) {
                 $newPage = $oldToNew[$currentPage];
                 $redirectUrl = add_query_arg('page', $newPage, admin_url('admin.php'));
-                wp_safe_remote_get($redirectUrl);
                 wp_safe_redirect($redirectUrl);
                 exit;
             }
@@ -254,16 +253,29 @@ class CommerceControlSuite {
             return;
         }
         
-        // Get statistics
-        $logTable = $wpdb->prefix . $this->logTable;
-        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-        $totalLogs = $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM %i", $logTable ) );
-        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-        $successLogs = $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM %i WHERE status = 'success'", $logTable ) );
-        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-        $errorLogs = $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM %i WHERE status = 'error'", $logTable ) );
-        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-        $recentLogs = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM %i ORDER BY created_at DESC LIMIT 5", $logTable ) );
+        // Get statistics with caching
+        $logTable    = $wpdb->prefix . $this->logTable;
+        $cache_group = 'commerce_control_suite_stats';
+        $totalLogs   = wp_cache_get( 'total_logs', $cache_group );
+        $successLogs = wp_cache_get( 'success_logs', $cache_group );
+        $errorLogs   = wp_cache_get( 'error_logs', $cache_group );
+        $recentLogs  = wp_cache_get( 'recent_logs', $cache_group );
+
+        if ( false === $totalLogs || false === $successLogs || false === $errorLogs || false === $recentLogs ) {
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            $totalLogs = $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM %i", $logTable ) );
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            $successLogs = $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM %i WHERE status = 'success'", $logTable ) );
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            $errorLogs = $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM %i WHERE status = 'error'", $logTable ) );
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            $recentLogs = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM %i ORDER BY created_at DESC LIMIT 5", $logTable ) );
+
+            wp_cache_set( 'total_logs', $totalLogs, $cache_group, 300 );
+            wp_cache_set( 'success_logs', $successLogs, $cache_group, 300 );
+            wp_cache_set( 'error_logs', $errorLogs, $cache_group, 300 );
+            wp_cache_set( 'recent_logs', $recentLogs, $cache_group, 300 );
+        }
         
         $orderStats = $this->orderControl->getStatistics();
         $paymentStats = $this->paymentGatewayControl->getStatistics();
@@ -401,8 +413,16 @@ class CommerceControlSuite {
         global $wpdb;
         
         $tableName = $wpdb->prefix . $this->logTable;
-        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-        $logs = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM %i ORDER BY created_at DESC LIMIT 20", $tableName ) );
+        $cache_key = 'recent_logs_20';
+        $cache_group = 'commerce_control_suite_logs';
+        
+        $logs = wp_cache_get( $cache_key, $cache_group );
+        
+        if ( false === $logs ) {
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            $logs = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM %i ORDER BY created_at DESC LIMIT 20", $tableName ) );
+            wp_cache_set( $cache_key, $logs, $cache_group, 300 );
+        }
         
         if (empty($logs)) {
             echo '<p>' . esc_html__('No logs found yet.', 'commerce-control-suite') . '</p>';
@@ -689,7 +709,9 @@ class CommerceControlSuite {
         }
         
         // Handle form submission
-        $this->handleOrderControlSubmission();
+        if ( isset( $_POST['ser_order_control_nonce'] ) ) {
+            $this->handleOrderControlSubmission();
+        }
         
         $settings = $this->orderControl->getSettings();
         $stats = $this->orderControl->getStatistics();
@@ -873,6 +895,33 @@ class CommerceControlSuite {
         </div>
         <?php
     }
+
+    /**
+     * Handle Order Control form submission
+     */
+    private function handleOrderControlSubmission() {
+        if ( ! isset( $_POST['ser_order_control_nonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['ser_order_control_nonce'] ) ), 'ser_order_control_save' ) ) {
+            return;
+        }
+
+        $settings = array(
+            'enable_orders'         => isset( $_POST['enable_orders'] ),
+            'restriction_type'      => isset( $_POST['restriction_type'] ) ? sanitize_text_field( wp_unslash( $_POST['restriction_type'] ) ) : 'all',
+            'restricted_categories' => isset( $_POST['restricted_categories'] ) ? array_map( 'intval', wp_unslash( $_POST['restricted_categories'] ) ) : array(),
+            'restricted_products'   => isset( $_POST['restricted_products'] ) ? array_map( 'intval', wp_unslash( $_POST['restricted_products'] ) ) : array(),
+            'enable_timeframe'      => isset( $_POST['enable_timeframe'] ),
+            'start_time'           => isset( $_POST['start_time'] ) ? sanitize_text_field( wp_unslash( $_POST['start_time'] ) ) : '00:00',
+            'end_time'             => isset( $_POST['end_time'] ) ? sanitize_text_field( wp_unslash( $_POST['end_time'] ) ) : '23:59',
+            'enable_date_range'     => isset( $_POST['enable_date_range'] ),
+            'start_datetime'       => isset( $_POST['start_datetime'] ) ? sanitize_text_field( wp_unslash( $_POST['start_datetime'] ) ) : '',
+            'end_datetime'         => isset( $_POST['end_datetime'] ) ? sanitize_text_field( wp_unslash( $_POST['end_datetime'] ) ) : '',
+            'redirect_url'          => isset( $_POST['redirect_url'] ) ? esc_url_raw( wp_unslash( $_POST['redirect_url'] ) ) : '',
+            'disabled_message'      => isset( $_POST['disabled_message'] ) ? sanitize_textarea_field( wp_unslash( $_POST['disabled_message'] ) ) : '',
+        );
+
+        $this->orderControl->updateSettings( $settings );
+        echo '<div class="notice notice-success is-dismissible"><p>' . esc_html__( 'Settings saved successfully!', 'commerce-control-suite' ) . '</p></div>';
+    }
     
     /**
      * Render Payment Gateway Control page
@@ -883,59 +932,24 @@ class CommerceControlSuite {
         }
         
         // Handle delete action
-        if (isset($_GET['action']) && $_GET['action'] === 'delete' && isset($_GET['rule_id']) && isset($_GET['_wpnonce']) && wp_verify_nonce(sanitize_text_field(wp_unslash($_GET['_wpnonce'])), 'delete_rule')) {
-            $settings = $this->payment_gateway_control->get_settings();
-            $rule_id = intval($_GET['rule_id']);
-            if (isset($settings['rules'][$rule_id])) {
-                unset($settings['rules'][$rule_id]);
-                $settings['rules'] = array_values($settings['rules']); // Reindex array
-                $this->payment_gateway_control->update_settings($settings);
-                echo '<div class="notice notice-success"><p>' . esc_html__('Rule deleted successfully!', 'commerce-control-suite') . '</p></div>';
-            }
+        if ( isset( $_GET['action'] ) && 'delete' === $_GET['action'] ) {
+            $this->handlePaymentGatewayRuleDeletion();
         }
         
         // Handle toggle enabled/disabled
-        if (isset($_GET['action']) && $_GET['action'] === 'toggle' && isset($_GET['rule_id']) && isset($_GET['_wpnonce']) && wp_verify_nonce(sanitize_text_field(wp_unslash($_GET['_wpnonce'])), 'toggle_rule')) {
-            $settings = $this->payment_gateway_control->get_settings();
-            $rule_id = intval($_GET['rule_id']);
-            if (isset($settings['rules'][$rule_id])) {
-                $settings['rules'][$rule_id]['enabled'] = !isset($settings['rules'][$rule_id]['enabled']) || $settings['rules'][$rule_id]['enabled'] ? false : true;
-                $this->payment_gateway_control->update_settings($settings);
-                echo '<div class="notice notice-success"><p>' . esc_html__('Rule status updated!', 'commerce-control-suite') . '</p></div>';
-            }
+        if ( isset( $_GET['action'] ) && 'toggle' === $_GET['action'] ) {
+            $this->handlePaymentGatewayRuleToggle();
         }
         
         // Handle add/edit rule submission
-        if (isset($_POST['ser_payment_gateway_rule_nonce']) && wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['ser_payment_gateway_rule_nonce'])), 'ser_payment_gateway_rule_save')) {
-            $settings = $this->payment_gateway_control->get_settings();
-            
-            $rule = array(
-                'currencies' => isset($_POST['currencies']) ? array_map('sanitize_text_field', wp_unslash($_POST['currencies'])) : array(),
-                'gateways' => isset($_POST['gateways']) ? array_map('sanitize_text_field', wp_unslash($_POST['gateways'])) : array(),
-                'enabled' => isset($_POST['enabled']) ? true : false,
-                'name' => isset($_POST['rule_name']) ? sanitize_text_field(wp_unslash($_POST['rule_name'])) : ''
-            );
-            
-            if (isset($_POST['rule_id']) && $_POST['rule_id'] !== '') {
-                // Edit existing rule
-                $rule_id = intval($_POST['rule_id']);
-                $settings['rules'][$rule_id] = $rule;
-            } else {
-                // Add new rule
-                if (!isset($settings['rules'])) {
-                    $settings['rules'] = array();
-                }
-                $settings['rules'][] = $rule;
-            }
-            
-            $this->payment_gateway_control->update_settings($settings);
-            echo '<div class="notice notice-success"><p>' . esc_html__('Rule saved successfully!', 'commerce-control-suite') . '</p></div>';
+        if ( isset( $_POST['ser_payment_gateway_rule_nonce'] ) ) {
+            $this->handlePaymentGatewayRuleSubmission();
         }
         
-        $settings = $this->payment_gateway_control->get_settings();
-        $available_gateways = $this->payment_gateway_control->get_available_gateways();
-        $currencies = $this->payment_gateway_control->get_active_currencies();
-        $stats = $this->payment_gateway_control->get_statistics();
+        $settings = $this->paymentGatewayControl->getSettings();
+        $available_gateways = $this->paymentGatewayControl->getAvailableGateways();
+        $currencies = $this->paymentGatewayControl->getActiveCurrencies();
+        $stats = $this->paymentGatewayControl->getStatistics();
         
         // Check if we're in edit/add mode
         $edit_mode = isset($_GET['action']) && ($_GET['action'] === 'edit' || $_GET['action'] === 'add');
@@ -1092,6 +1106,74 @@ class CommerceControlSuite {
         </div>
         <?php
     }
+
+    /**
+     * Handle payment gateway rule deletion
+     */
+    private function handlePaymentGatewayRuleDeletion() {
+        if ( ! isset( $_GET['rule_id'] ) || ! isset( $_GET['_wpnonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_GET['_wpnonce'] ) ), 'delete_rule' ) ) {
+            return;
+        }
+
+        $settings = $this->paymentGatewayControl->getSettings();
+        $rule_id  = intval( $_GET['rule_id'] );
+        if ( isset( $settings['rules'][ $rule_id ] ) ) {
+            unset( $settings['rules'][ $rule_id ] );
+            $settings['rules'] = array_values( $settings['rules'] ); // Reindex array
+            $this->paymentGatewayControl->updateSettings( $settings );
+            echo '<div class="notice notice-success is-dismissible"><p>' . esc_html__( 'Rule deleted successfully!', 'commerce-control-suite' ) . '</p></div>';
+        }
+    }
+
+    /**
+     * Handle payment gateway rule toggle
+     */
+    private function handlePaymentGatewayRuleToggle() {
+        if ( ! isset( $_GET['rule_id'] ) || ! isset( $_GET['_wpnonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_GET['_wpnonce'] ) ), 'toggle_rule' ) ) {
+            return;
+        }
+
+        $settings = $this->paymentGatewayControl->getSettings();
+        $rule_id  = intval( $_GET['rule_id'] );
+        if ( isset( $settings['rules'][ $rule_id ] ) ) {
+            $settings['rules'][ $rule_id ]['enabled'] = ! isset( $settings['rules'][ $rule_id ]['enabled'] ) || $settings['rules'][ $rule_id ]['enabled'] ? false : true;
+            $this->paymentGatewayControl->updateSettings( $settings );
+            echo '<div class="notice notice-success is-dismissible"><p>' . esc_html__( 'Rule status updated!', 'commerce-control-suite' ) . '</p></div>';
+        }
+    }
+
+    /**
+     * Handle payment gateway rule form submission
+     */
+    private function handlePaymentGatewayRuleSubmission() {
+        if ( ! isset( $_POST['ser_payment_gateway_rule_nonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['ser_payment_gateway_rule_nonce'] ) ), 'ser_payment_gateway_rule_save' ) ) {
+            return;
+        }
+
+        $settings = $this->paymentGatewayControl->getSettings();
+
+        $rule = array(
+            'currencies' => isset( $_POST['currencies'] ) ? array_map( 'sanitize_text_field', wp_unslash( $_POST['currencies'] ) ) : array(),
+            'gateways'   => isset( $_POST['gateways'] ) ? array_map( 'sanitize_text_field', wp_unslash( $_POST['gateways'] ) ) : array(),
+            'enabled'    => isset( $_POST['enabled'] ),
+            'name'       => isset( $_POST['rule_name'] ) ? sanitize_text_field( wp_unslash( $_POST['rule_name'] ) ) : '',
+        );
+
+        if ( isset( $_POST['rule_id'] ) && '' !== $_POST['rule_id'] ) {
+            // Edit existing rule
+            $rule_id = intval( $_POST['rule_id'] );
+            $settings['rules'][ $rule_id ] = $rule;
+        } else {
+            // Add new rule
+            if ( ! isset( $settings['rules'] ) ) {
+                $settings['rules'] = array();
+            }
+            $settings['rules'][] = $rule;
+        }
+
+        $this->paymentGatewayControl->updateSettings( $settings );
+        echo '<div class="notice notice-success is-dismissible"><p>' . esc_html__( 'Rule saved successfully!', 'commerce-control-suite' ) . '</p></div>';
+    }
     
     /**
      * AJAX handler to get log details
@@ -1113,8 +1195,18 @@ class CommerceControlSuite {
         
         global $wpdb;
         $tableName = $wpdb->prefix . $this->logTable;
-        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-        $log = $wpdb->get_row($wpdb->prepare("SELECT * FROM %i WHERE id = %d", $tableName, $logId));
+        $cache_key = 'log_detail_' . $logId;
+        $cache_group = 'commerce_control_suite_logs';
+        
+        $log = wp_cache_get( $cache_key, $cache_group );
+        
+        if ( false === $log ) {
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            $log = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM %i WHERE id = %d", $tableName, $logId ) );
+            if ( $log ) {
+                wp_cache_set( $cache_key, $log, $cache_group, 3600 );
+            }
+        }
         
         if (!$log) {
             wp_send_json_error('Log not found');
@@ -1151,8 +1243,6 @@ class CommerceControlSuite {
     }
     
     public function handleWebhook(WP_REST_Request $request) {
-        global $wpdb;
-        
         // Get request data
         $body = $request->get_body();
         $params = $request->get_json_params();
@@ -1242,7 +1332,14 @@ class CommerceControlSuite {
             array('%s', '%s', '%s', '%s', '%s', '%s')
         );
         
-        return $wpdb->insert_id;
+        $insert_id = $wpdb->insert_id;
+        
+        // Clear related caches
+        wp_cache_delete( 'total_logs', 'commerce_control_suite_stats' );
+        wp_cache_delete( 'recent_logs', 'commerce_control_suite_stats' );
+        wp_cache_delete( 'recent_logs_20', 'commerce_control_suite_logs' );
+        
+        return $insert_id;
     }
     
     private function updateLogStatus($logId, $status, $responseData = array()) {
@@ -1261,6 +1358,13 @@ class CommerceControlSuite {
             array('%s', '%s', '%s'),
             array('%d')
         );
+        
+        // Clear related caches
+        wp_cache_delete( 'success_logs', 'commerce_control_suite_stats' );
+        wp_cache_delete( 'error_logs', 'commerce_control_suite_stats' );
+        wp_cache_delete( 'recent_logs', 'commerce_control_suite_stats' );
+        wp_cache_delete( 'recent_logs_20', 'commerce_control_suite_logs' );
+        wp_cache_delete( 'log_detail_' . $logId, 'commerce_control_suite_logs' );
     }
     
     private function getClientIp() {
@@ -1280,9 +1384,17 @@ class CommerceControlSuite {
         
         $tableName = $wpdb->prefix . $this->logTable;
         
-        // Check if table exists
-        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-        if ($wpdb->get_var( $wpdb->prepare( "SHOW TABLES LIKE %s", $tableName ) ) != $tableName) {
+        // Check if table exists (cached for 24 hours as schema doesn't change often)
+        $cache_key = 'table_exists_' . $tableName;
+        $exists = wp_cache_get( $cache_key, 'commerce_control_suite_schema' );
+        
+        if ( false === $exists ) {
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+            $exists = $wpdb->get_var( $wpdb->prepare( "SHOW TABLES LIKE %s", $tableName ) );
+            wp_cache_set( $cache_key, $exists, 'commerce_control_suite_schema', DAY_IN_SECONDS );
+        }
+
+        if ($exists != $tableName) {
             $this->createLogTable();
         }
     }
@@ -1310,6 +1422,9 @@ class CommerceControlSuite {
         
         require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
         dbDelta($sql);
+        
+        // Clear table existence cache
+        wp_cache_delete( 'table_exists_' . $tableName, 'commerce_control_suite_schema' );
     }
 }
 
