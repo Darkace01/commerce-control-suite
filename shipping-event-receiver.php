@@ -712,7 +712,7 @@ class CommerceControlSuite {
         }
         
         // Handle form submission
-        if ( isset( $_POST['ser_order_control_nonce'] ) ) {
+        if ( isset( $_POST['ser_order_control_nonce'] ) && wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['ser_order_control_nonce'] ) ), 'ser_order_control_save' ) ) {
             $this->handleOrderControlSubmission();
         }
         
@@ -935,17 +935,17 @@ class CommerceControlSuite {
         }
         
         // Handle delete action
-        if ( isset( $_GET['action'] ) && 'delete' === $_GET['action'] ) {
+        if ( isset( $_GET['action'] ) && 'delete' === $_GET['action'] && isset( $_GET['_wpnonce'] ) && wp_verify_nonce( sanitize_text_field( wp_unslash( $_GET['_wpnonce'] ) ), 'delete_rule' ) ) {
             $this->handlePaymentGatewayRuleDeletion();
         }
         
         // Handle toggle enabled/disabled
-        if ( isset( $_GET['action'] ) && 'toggle' === $_GET['action'] ) {
+        if ( isset( $_GET['action'] ) && 'toggle' === $_GET['action'] && isset( $_GET['_wpnonce'] ) && wp_verify_nonce( sanitize_text_field( wp_unslash( $_GET['_wpnonce'] ) ), 'toggle_rule' ) ) {
             $this->handlePaymentGatewayRuleToggle();
         }
         
         // Handle add/edit rule submission
-        if ( isset( $_POST['ser_payment_gateway_rule_nonce'] ) ) {
+        if ( isset( $_POST['ser_payment_gateway_rule_nonce'] ) && wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['ser_payment_gateway_rule_nonce'] ) ), 'ser_payment_gateway_rule_save' ) ) {
             $this->handlePaymentGatewayRuleSubmission();
         }
         
